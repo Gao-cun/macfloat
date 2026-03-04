@@ -17,6 +17,7 @@ struct TongjiImportSheet: View {
     @State private var lastImportSource: String?
     @State private var calendarSyncMessage: String?
     @State private var isSyncingCalendar = false
+    @State private var isRecreatingCalendar = false
 
     private let parser = TongjiScheduleHTMLParser()
 
@@ -214,6 +215,8 @@ struct TongjiImportSheet: View {
                 .foregroundStyle(.secondary)
             if let snapshot = coordinator.calendarSyncStatusSnapshot {
                 detailRow(title: "目标日历", value: snapshot.calendarName)
+                detailRow(title: "绑定状态", value: snapshot.calendarStatusText)
+                detailRow(title: "已同步事件", value: "\(snapshot.syncedEventCount) 个")
                 detailRow(title: "上次同步", value: snapshot.lastSyncedAt?.formattedSyncDateTime() ?? "还没有同步记录")
             }
             if let calendarSyncMessage {
@@ -230,7 +233,7 @@ struct TongjiImportSheet: View {
 
                 Spacer()
 
-                if coordinator.calendarSyncStatusSnapshot?.isFailure == true {
+                if coordinator.calendarSyncStatusSnapshot?.needsAttention == true {
                     Button("重试同步日历") {
                         isSyncingCalendar = true
                         Task {
@@ -242,15 +245,28 @@ struct TongjiImportSheet: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(isSyncingCalendar)
+                    .disabled(isSyncingCalendar || isRecreatingCalendar)
                 }
+
+                Button("重新创建同步日历") {
+                    isRecreatingCalendar = true
+                    Task {
+                        let message = await coordinator.recreateCalendarSync()
+                        await MainActor.run {
+                            calendarSyncMessage = message
+                            isRecreatingCalendar = false
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isSyncingCalendar || isRecreatingCalendar)
 
                 Button("关闭") {
                     isPresented = false
                 }
                 .buttonStyle(.borderedProminent)
             }
-            if isSyncingCalendar {
+            if isSyncingCalendar || isRecreatingCalendar {
                 ProgressView("正在同步 Apple Calendar…")
                     .controlSize(.small)
             }

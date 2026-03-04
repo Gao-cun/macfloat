@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var editingTerm: Term?
     @State private var syncMessage: String?
     @State private var isSyncingCalendar = false
+    @State private var isRecreatingCalendar = false
 
     var body: some View {
         ScrollView {
@@ -162,26 +163,43 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 if let snapshot = coordinator.calendarSyncStatusSnapshot {
                     syncStatusRow(title: "目标日历", value: snapshot.calendarName)
+                    syncStatusRow(title: "绑定状态", value: snapshot.calendarStatusText)
+                    syncStatusRow(title: "已同步事件", value: "\(snapshot.syncedEventCount) 个")
                     syncStatusRow(title: "上次同步", value: snapshot.lastSyncedAt?.formattedSyncDateTime() ?? "还没有同步记录")
                     if let lastMessage = snapshot.lastMessage {
                         Text(lastMessage)
                             .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(snapshot.isFailure ? .orange : .green)
+                            .foregroundStyle(snapshot.needsAttention ? .orange : .green)
                     }
                 }
-                Button(coordinator.calendarSyncStatusSnapshot?.isFailure == true ? "重试同步到日历" : "立即同步到日历") {
-                    isSyncingCalendar = true
-                    Task {
-                        let message = await coordinator.syncCalendar()
-                        await MainActor.run {
-                            syncMessage = message
-                            isSyncingCalendar = false
+                HStack(spacing: 10) {
+                    Button(coordinator.calendarSyncStatusSnapshot?.needsAttention == true ? "重试同步到日历" : "立即同步到日历") {
+                        isSyncingCalendar = true
+                        Task {
+                            let message = await coordinator.syncCalendar()
+                            await MainActor.run {
+                                syncMessage = message
+                                isSyncingCalendar = false
+                            }
                         }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!(editingTerm.map { ScheduleTemplateValidator.validate($0.templates).isEmpty } ?? false) || isRecreatingCalendar)
+
+                    Button("重新创建同步日历") {
+                        isRecreatingCalendar = true
+                        Task {
+                            let message = await coordinator.recreateCalendarSync()
+                            await MainActor.run {
+                                syncMessage = message
+                                isRecreatingCalendar = false
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!(editingTerm.map { ScheduleTemplateValidator.validate($0.templates).isEmpty } ?? false) || isSyncingCalendar)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!(editingTerm.map { ScheduleTemplateValidator.validate($0.templates).isEmpty } ?? false))
-                if isSyncingCalendar {
+                if isSyncingCalendar || isRecreatingCalendar {
                     ProgressView()
                         .controlSize(.small)
                 }

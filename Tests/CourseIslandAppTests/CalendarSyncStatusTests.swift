@@ -32,9 +32,9 @@ final class CalendarSyncStatusTests: XCTestCase {
             Course(title: "旧课程", rules: [otherRule]),
         ]
         store.syncStates = [
-            SyncState(entityType: "courseMeetingRule", entityId: activeRule.id.uuidString, ownerId: UUID().uuidString, lastSyncedAt: makeDate(year: 2026, month: 3, day: 4, hour: 10, minute: 0)),
-            SyncState(entityType: "courseMeetingRule", entityId: activeRule2.id.uuidString, ownerId: UUID().uuidString, lastSyncedAt: makeDate(year: 2026, month: 3, day: 5, hour: 8, minute: 30)),
-            SyncState(entityType: "courseMeetingRule", entityId: otherRule.id.uuidString, ownerId: UUID().uuidString, lastSyncedAt: makeDate(year: 2026, month: 2, day: 1, hour: 9, minute: 0)),
+            SyncState(entityType: "courseMeetingRule", entityId: activeRule.id.uuidString, ownerId: UUID().uuidString, externalCalendarEventIDs: "evt-1,evt-2", lastSyncedAt: makeDate(year: 2026, month: 3, day: 4, hour: 10, minute: 0)),
+            SyncState(entityType: "courseMeetingRule", entityId: activeRule2.id.uuidString, ownerId: UUID().uuidString, externalCalendarEventIDs: "evt-3", lastSyncedAt: makeDate(year: 2026, month: 3, day: 5, hour: 8, minute: 30)),
+            SyncState(entityType: "courseMeetingRule", entityId: otherRule.id.uuidString, ownerId: UUID().uuidString, externalCalendarEventIDs: "evt-4,evt-5,evt-6", lastSyncedAt: makeDate(year: 2026, month: 2, day: 1, hour: 9, minute: 0)),
         ]
 
         let coordinator = AppCoordinator(store: store)
@@ -42,6 +42,8 @@ final class CalendarSyncStatusTests: XCTestCase {
 
         XCTAssertEqual(snapshot?.calendarName, "课程表 - 2026 春季学期")
         XCTAssertEqual(snapshot?.lastSyncedAt, makeDate(year: 2026, month: 3, day: 5, hour: 8, minute: 30))
+        XCTAssertEqual(snapshot?.syncedEventCount, 3)
+        XCTAssertEqual(snapshot?.calendarStatusText, "尚未创建")
     }
 
     func testCalendarSyncStatusMarksFailureMessageAsRetryable() {
@@ -55,6 +57,7 @@ final class CalendarSyncStatusTests: XCTestCase {
         coordinator.lastCalendarSyncMessage = "同步失败：测试错误"
 
         XCTAssertTrue(coordinator.calendarSyncStatusSnapshot?.isFailure == true)
+        XCTAssertTrue(coordinator.calendarSyncStatusSnapshot?.needsAttention == true)
     }
 
     private func makeDate(year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Date {

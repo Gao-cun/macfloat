@@ -66,6 +66,16 @@ struct IslandView: View {
 
     @ViewBuilder
     private var expandedContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            primaryExpandedContent
+            Divider()
+                .overlay(Color.white.opacity(0.45))
+            accessoryCards
+        }
+    }
+
+    @ViewBuilder
+    private var primaryExpandedContent: some View {
         switch viewModel.status {
         case .reminder(let item):
             VStack(alignment: .leading, spacing: 10) {
@@ -110,6 +120,61 @@ struct IslandView: View {
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var accessoryCards: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            accessoryCard(
+                icon: "cloud.sun.fill",
+                title: "天气",
+                body: weatherBody,
+                tint: Color(hex: "#4C90FF")
+            )
+            accessoryCard(
+                icon: "music.note",
+                title: "正在播放",
+                body: nowPlayingBody,
+                tint: Color(hex: "#FF8A00")
+            )
+        }
+    }
+
+    private var weatherBody: String {
+        guard let weather = viewModel.weatherSummary else {
+            return "天气暂不可用"
+        }
+        return "\(weather.locationName) · \(weather.temperatureText) · \(weather.conditionText)"
+    }
+
+    private var nowPlayingBody: String {
+        guard let nowPlaying = viewModel.nowPlayingSummary else {
+            return "未检测到 Apple Music / Spotify 正在播放"
+        }
+        return "\(nowPlaying.title)\n\(nowPlaying.subtitle)"
+    }
+
+    private func accessoryCard(icon: String, title: String, body: String, tint: Color) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                Text(body)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.52), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func detailLine(_ label: String, _ value: String) -> some View {

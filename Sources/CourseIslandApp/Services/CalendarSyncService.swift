@@ -19,6 +19,11 @@ final class CalendarSyncService {
         return expectedCalendarTitle(for: term)
     }
 
+    func calendarExists(for term: Term) -> Bool {
+        guard let identifier = term.calendarIdentifier else { return false }
+        return eventStore.calendar(withIdentifier: identifier) != nil
+    }
+
     func ensureCalendar(for term: Term) async throws -> String {
         if let identifier = term.calendarIdentifier,
            eventStore.calendar(withIdentifier: identifier) != nil {
@@ -38,6 +43,12 @@ final class CalendarSyncService {
         guard let termIndex = store.terms.firstIndex(where: { $0.id == termID }) else {
             return
         }
+        if let identifier = store.terms[termIndex].calendarIdentifier,
+           eventStore.calendar(withIdentifier: identifier) == nil {
+            clearSyncStates(for: store.terms[termIndex], store: store)
+            store.terms[termIndex].calendarIdentifier = nil
+        }
+
         let term = store.terms[termIndex]
         let calendarID = try await ensureCalendar(for: term)
         guard let ekCalendar = eventStore.calendar(withIdentifier: calendarID) else {
@@ -110,6 +121,31 @@ final class CalendarSyncService {
         store.persist()
     }
 
+    func recreateCalendar(termID: UUID, store: AppStore) async throws {
+        guard let termIndex = store.terms.firstIndex(where: { $0.id == termID }) else {
+            return
+        }
+
+        let term = store.terms[termIndex]
+        let existingCalendar = term.calendarIdentifier.flatMap { eventStore.calendar(withIdentifier: $0) }
+
+        clearSyncStates(for: term, store: store)
+
+        if let existingCalendar {
+            do {
+                try eventStore.removeCalendar(existingCalendar, commit: true)
+                store.terms[termIndex].calendarIdentifier = nil
+            } catch {
+                store.terms[termIndex].calendarIdentifier = existingCalendar.calendarIdentifier
+            }
+        } else {
+            store.terms[termIndex].calendarIdentifier = nil
+        }
+
+        store.persist()
+        try await sync(termID: termID, store: store)
+    }
+
     func removeEvents(for courseID: UUID, store: AppStore) async throws {
         let states = store.syncStates.filter { $0.ownerId == courseID.uuidString && $0.entityType == entityType }
         for state in states {
@@ -128,6 +164,31 @@ final class CalendarSyncService {
             }
             try? eventStore.remove(event, span: .thisEvent, commit: false)
         }
+    }
+
+    private func clearSyncStates(for term: Term, store: AppStore) {
+        let relevantRuleIDs = Set(
+            store.courses
+                .filter { !$0.isArchived }
+                .flatMap { course in
+                    course.rules
+                        .filter { $0.termId == term.id }
+                        .map(\.id.uuidString)
+                }
+        )
+
+        let staleStates = store.syncStates.filter {
+            $0.entityType == entityType && relevantRuleIDs.contains($0.entityId)
+        }
+
+        for state in staleStates {
+            deleteEvents(with: state.eventIDs)
+        }
+
+        store.syncStates.removeAll {
+            $0.entityType == entityType && relevantRuleIDs.contains($0.entityId)
+        }
+        try? eventStore.commit()
     }
 
     private func dateForWeek(_ week: Int, weekday: Int, term: Term) -> Date {

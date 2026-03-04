@@ -30,12 +30,26 @@ enum SidebarSection: String, CaseIterable, Identifiable {
 
 struct CalendarSyncStatusSnapshot {
     var calendarName: String
+    var hasCalendarBinding: Bool
+    var calendarExists: Bool
+    var syncedEventCount: Int
     var lastSyncedAt: Date?
     var lastMessage: String?
 
     var isFailure: Bool {
         guard let lastMessage else { return false }
         return lastMessage.contains("失败") || lastMessage.contains("未授权") || lastMessage.contains("无法")
+    }
+
+    var needsAttention: Bool {
+        isFailure || (hasCalendarBinding && !calendarExists)
+    }
+
+    var calendarStatusText: String {
+        if !hasCalendarBinding {
+            return "尚未创建"
+        }
+        return calendarExists ? "存在" : "已丢失"
     }
 }
 
@@ -56,6 +70,8 @@ final class AppCoordinator: ObservableObject {
     let calendarSyncService = CalendarSyncService()
     let islandViewModel = IslandViewModel()
     let tongjiImportService = TongjiScheduleImportService()
+    let weatherService = IslandWeatherService()
+    let nowPlayingService = NowPlayingService()
 
     private let scheduleEngine = ScheduleEngine()
     private var islandPanelController: IslandPanelController?
@@ -82,22 +98,20 @@ final class AppCoordinator: ObservableObject {
 
     var calendarSyncStatusSnapshot: CalendarSyncStatusSnapshot? {
         guard let activeTerm else { return nil }
-        let ruleIDs = Set(
-            store.courses
-                .filter { !$0.isArchived }
-                .flatMap { course in
-                    course.rules
-                        .filter { $0.termId == activeTerm.id }
-                        .map { $0.id.uuidString }
-                }
-        )
+        let ruleIDs = relevantRuleIDs(for: activeTerm)
+        let relevantStates = store.syncStates.filter {
+            $0.entityType == "courseMeetingRule" && ruleIDs.contains($0.entityId)
+        }
         let lastSyncedAt = store.syncStates
-            .filter { ruleIDs.contains($0.entityId) }
+            .filter { $0.entityType == "courseMeetingRule" && ruleIDs.contains($0.entityId) }
             .compactMap(\.lastSyncedAt)
             .max()
 
         return CalendarSyncStatusSnapshot(
             calendarName: calendarSyncService.calendarDisplayName(for: activeTerm),
+            hasCalendarBinding: activeTerm.calendarIdentifier != nil,
+            calendarExists: calendarSyncService.calendarExists(for: activeTerm),
+            syncedEventCount: relevantStates.reduce(0) { $0 + $1.eventIDs.count },
             lastSyncedAt: lastSyncedAt,
             lastMessage: lastCalendarSyncMessage
         )
@@ -117,11 +131,14 @@ final class AppCoordinator: ObservableObject {
             await permissionService.refreshStatuses()
             await reminderScheduler.refreshPendingReminders(store: store)
             refreshIslandStatus()
+            await refreshIslandAccessories(forceWeatherRefresh: true)
         }
 
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.refreshIslandStatus()
+                self.refreshIslandStatus()
+                await self.refreshIslandAccessories()
             }
         }
     }
@@ -375,9 +392,42 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
+    @discardableResult
+    func recreateCalendarSync() async -> String {
+        await permissionService.refreshStatuses()
+
+        guard let activeTerm else {
+            let message = "还没有当前学期，无法重新创建同步日历。"
+            lastCalendarSyncMessage = message
+            islandSummary = message
+            return message
+        }
+
+        guard permissionService.calendarState == .granted else {
+            let message = "日历权限未授权，无法重新创建同步日历。"
+            lastCalendarSyncMessage = message
+            islandSummary = message
+            return message
+        }
+
+        do {
+            try await calendarSyncService.recreateCalendar(termID: activeTerm.id, store: store)
+            let message = "已重新创建“\(activeTerm.name)”的同步日历。"
+            lastCalendarSyncMessage = message
+            refreshIslandStatus()
+            return message
+        } catch {
+            let message = "重新创建同步日历失败：\(error.localizedDescription)"
+            lastCalendarSyncMessage = message
+            islandSummary = message
+            return message
+        }
+    }
+
     private func installIslandPanelIfNeeded() {
         guard islandPanelController == nil else { return }
         islandPanelController = IslandPanelController(
+            viewModel: islandViewModel,
             rootView: AnyView(
                 IslandView(viewModel: islandViewModel)
                     .environmentObject(self)
@@ -393,6 +443,25 @@ final class AppCoordinator: ObservableObject {
         if sessions.contains(where: { $0.courseID == selectedCourseID }) == false {
             self.selectedCourseID = nil
         }
+    }
+
+    private func relevantRuleIDs(for term: Term) -> Set<String> {
+        Set(
+            store.courses
+                .filter { !$0.isArchived }
+                .flatMap { course in
+                    course.rules
+                        .filter { $0.termId == term.id }
+                        .map(\.id.uuidString)
+                }
+        )
+    }
+
+    private func refreshIslandAccessories(forceWeatherRefresh: Bool = false) async {
+        let weatherSummary = await weatherService.currentWeather(forceRefresh: forceWeatherRefresh)
+        let nowPlayingSummary = nowPlayingService.currentSummary()
+        islandViewModel.weatherSummary = weatherSummary
+        islandViewModel.nowPlayingSummary = nowPlayingSummary
     }
 
     static func defaultPeriodSlots() -> [PeriodSlot] {

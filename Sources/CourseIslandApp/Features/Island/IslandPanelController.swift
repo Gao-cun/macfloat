@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 final class FloatingIslandPanel: NSPanel {
@@ -9,10 +10,13 @@ final class FloatingIslandPanel: NSPanel {
 @MainActor
 final class IslandPanelController {
     private let panel: FloatingIslandPanel
+    private var cancellables: Set<AnyCancellable> = []
+    private let collapsedHeight: CGFloat = 120
+    private let expandedHeight: CGFloat = 260
 
-    init(rootView: AnyView) {
+    init(viewModel: IslandViewModel, rootView: AnyView) {
         panel = FloatingIslandPanel(
-            contentRect: .init(x: 0, y: 0, width: 440, height: 120),
+            contentRect: .init(x: 0, y: 0, width: 440, height: collapsedHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -25,6 +29,13 @@ final class IslandPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         positionPanel()
+
+        viewModel.$isExpanded
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isExpanded in
+                self?.updatePanelSize(isExpanded: isExpanded)
+            }
+            .store(in: &cancellables)
     }
 
     func show() {
@@ -45,8 +56,17 @@ final class IslandPanelController {
         let frame = screen.visibleFrame
         let origin = CGPoint(
             x: frame.midX - 220,
-            y: frame.maxY - 120
+            y: frame.maxY - panel.frame.height
         )
         panel.setFrameOrigin(origin)
+    }
+
+    private func updatePanelSize(isExpanded: Bool) {
+        let targetSize = NSSize(width: 440, height: isExpanded ? expandedHeight : collapsedHeight)
+        var nextFrame = panel.frame
+        nextFrame.origin.y += nextFrame.height - targetSize.height
+        nextFrame.size = targetSize
+        panel.setFrame(nextFrame, display: true, animate: true)
+        positionPanel()
     }
 }
