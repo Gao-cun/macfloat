@@ -5,6 +5,9 @@ struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
 
     @State private var editingTerm: Term?
+    @State private var draftTermName = "2026 春季学期"
+    @State private var draftStartDate = Calendar.courseIsland.startOfDay(for: Date())
+    @State private var draftTotalWeeks = 18
     @State private var syncMessage: String?
     @State private var isSyncingCalendar = false
     @State private var isRecreatingCalendar = false
@@ -15,6 +18,7 @@ struct SettingsView: View {
                 Text("设置")
                     .font(.system(size: 32, weight: .black, design: .rounded))
 
+                onboardingSection
                 validationSection
                 termSection
                 templatesSection
@@ -24,10 +28,10 @@ struct SettingsView: View {
             .padding(.vertical, 4)
         }
         .onAppear {
-            editingTerm = coordinator.activeTerm
+            refreshEditingState()
         }
         .onChange(of: store.terms) { _, _ in
-            editingTerm = coordinator.activeTerm
+            refreshEditingState()
         }
         .alert("日历同步", isPresented: Binding(
             get: { syncMessage != nil },
@@ -39,6 +43,24 @@ struct SettingsView: View {
         } message: {
             Text(syncMessage ?? "")
         }
+    }
+
+    private var onboardingSection: some View {
+        GroupBox("当前进度") {
+            VStack(alignment: .leading, spacing: 12) {
+                onboardingRow(title: "1. 创建当前学期", isDone: coordinator.activeTerm != nil)
+                onboardingRow(title: "2. 配置有效节次模板", isDone: coordinator.hasCompletedInitialSetup)
+                onboardingRow(title: "3. 录入第一门课程", isDone: coordinator.hasCompletedInitialSetup && coordinator.hasAtLeastOneCourse)
+
+                if !coordinator.hasCompletedInitialSetup {
+                    Text("设置页会一直保留可编辑状态。即使节次模板暂时有冲突，也可以继续留在这里修正。")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .groupBoxStyle(CardGroupBoxStyle())
     }
 
     private var validationSection: some View {
@@ -92,7 +114,25 @@ struct SettingsView: View {
                     .buttonStyle(.borderedProminent)
                 }
             } else {
-                Text("还没有当前学期，请先回欢迎页创建。")
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("还没有当前学期，先在这里创建一个。")
+                        .foregroundStyle(.secondary)
+
+                    TextField("学期名称", text: $draftTermName)
+                    DatePicker("学期开始日", selection: $draftStartDate, displayedComponents: .date)
+                    Stepper("教学周数：\(draftTotalWeeks)", value: $draftTotalWeeks, in: 1...30)
+
+                    Button("创建当前学期") {
+                        let trimmedName = draftTermName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedName.isEmpty else { return }
+                        coordinator.createOrUpdateActiveTerm(
+                            name: trimmedName,
+                            startDate: draftStartDate,
+                            totalWeeks: draftTotalWeeks
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
         }
         .groupBoxStyle(CardGroupBoxStyle())
@@ -101,31 +141,41 @@ struct SettingsView: View {
     private var templatesSection: some View {
         GroupBox("节次模板") {
             VStack(alignment: .leading, spacing: 12) {
+                Text("现在全周共用同一套节次和时间设置。修改这里后，周一到周日会同步更新。")
+                    .foregroundStyle(.secondary)
+
                 Button("补齐默认一周模板") {
                     coordinator.ensureWeekdayTemplates()
                     editingTerm = coordinator.activeTerm
                 }
                 .buttonStyle(.bordered)
 
-                if let editingTerm {
-                    ForEach(editingTerm.templates.sorted { $0.weekday < $1.weekday }) { template in
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("周\(template.weekday)")
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                if let sharedTemplate {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("全周统一模板")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
 
-                            ForEach(template.periods.sorted { $0.index < $1.index }) { period in
-                                PeriodDraftRow(
-                                    period: bindingForPeriod(templateID: template.id, periodID: period.id)
-                                )
+                        ForEach(sharedTemplate.periods.sorted { $0.index < $1.index }) { period in
+                            PeriodDraftRow(
+                                period: bindingForSharedPeriod(periodID: period.id)
+                            )
+                        }
+
+                        HStack(spacing: 10) {
+                            Button("新增节次") {
+                                addSharedPeriod()
                             }
 
-                            Button("新增节次") {
-                                addPeriod(to: template.id)
+                            if !sharedTemplate.periods.isEmpty {
+                                Button("删除最后一节") {
+                                    removeLastSharedPeriod()
+                                }
+                                .foregroundStyle(.red)
                             }
                         }
-                        .padding(16)
-                        .background(RoundedRectangle(cornerRadius: 18).fill(Color.white.opacity(0.55)))
                     }
+                    .padding(16)
+                    .background(RoundedRectangle(cornerRadius: 18).fill(Color.white.opacity(0.55)))
                 }
             }
         }
@@ -219,40 +269,84 @@ struct SettingsView: View {
         }
     }
 
-    private func bindingForPeriod(templateID: UUID, periodID: UUID) -> Binding<PeriodSlot> {
+    private var sharedTemplate: DayScheduleTemplate? {
+        editingTerm?.templates.sorted { $0.weekday < $1.weekday }.first
+    }
+
+    private func bindingForSharedPeriod(periodID: UUID) -> Binding<PeriodSlot> {
         Binding(
             get: {
-                guard let term = editingTerm,
-                      let template = term.templates.first(where: { $0.id == templateID }),
+                guard let template = sharedTemplate,
                       let period = template.periods.first(where: { $0.id == periodID }) else {
                     return PeriodSlot(index: 1, startHour: 8, startMinute: 0, endHour: 8, endMinute: 45, label: "节次")
                 }
                 return period
             },
             set: { newValue in
-                guard var term = editingTerm,
-                      let templateIndex = term.templates.firstIndex(where: { $0.id == templateID }),
-                      let periodIndex = term.templates[templateIndex].periods.firstIndex(where: { $0.id == periodID }) else {
+                guard let template = sharedTemplate else {
                     return
                 }
-                term.templates[templateIndex].periods[periodIndex] = newValue
-                editingTerm = term
-                coordinator.updateActiveTerm(term)
+                var periods = template.periods.sorted { $0.index < $1.index }
+                guard let periodIndex = periods.firstIndex(where: { $0.id == periodID }) else {
+                    return
+                }
+                periods[periodIndex] = newValue
+                let normalizedPeriods = periods.sorted { $0.index < $1.index }
+                coordinator.updateActiveTermSharedPeriods(normalizedPeriods)
+                editingTerm = coordinator.activeTerm
             }
         )
     }
 
-    private func addPeriod(to templateID: UUID) {
-        guard var term = editingTerm,
-              let templateIndex = term.templates.firstIndex(where: { $0.id == templateID }) else {
+    private func refreshEditingState() {
+        editingTerm = coordinator.activeTerm
+        if let term = coordinator.activeTerm {
+            draftTermName = term.name
+            draftStartDate = term.startDate
+            draftTotalWeeks = term.totalWeeks
+        }
+    }
+
+    private func addSharedPeriod() {
+        guard let template = sharedTemplate else {
             return
         }
-        let nextIndex = (term.templates[templateIndex].periods.map(\.index).max() ?? 0) + 1
-        term.templates[templateIndex].periods.append(
-            PeriodSlot(index: nextIndex, startHour: 19, startMinute: 30, endHour: 20, endMinute: 15, label: "第\(nextIndex)节")
+        var periods = template.periods.sorted { $0.index < $1.index }
+        let nextIndex = (periods.map(\.index).max() ?? 0) + 1
+        let previous = periods.last
+        let startMinutes = min((previous?.endHour ?? 19) * 60 + (previous?.endMinute ?? 30) + 5, 23 * 60 + 30)
+        let endMinutes = min(startMinutes + 45, 23 * 60 + 59)
+
+        periods.append(
+            PeriodSlot(
+                index: nextIndex,
+                startHour: startMinutes / 60,
+                startMinute: startMinutes % 60,
+                endHour: endMinutes / 60,
+                endMinute: endMinutes % 60,
+                label: "第\(nextIndex)节"
+            )
         )
-        editingTerm = term
-        coordinator.updateActiveTerm(term)
+        coordinator.updateActiveTermSharedPeriods(periods)
+        editingTerm = coordinator.activeTerm
+    }
+
+    private func removeLastSharedPeriod() {
+        guard let template = sharedTemplate else { return }
+        var periods = template.periods.sorted { $0.index < $1.index }
+        guard !periods.isEmpty else { return }
+        periods.removeLast()
+        coordinator.updateActiveTermSharedPeriods(periods)
+        editingTerm = coordinator.activeTerm
+    }
+}
+
+private func onboardingRow(title: String, isDone: Bool) -> some View {
+    HStack(spacing: 10) {
+        Image(systemName: isDone ? "checkmark.circle.fill" : "circle.dashed")
+            .foregroundStyle(isDone ? Color.green : Color.secondary)
+        Text(title)
+            .font(.system(size: 14, weight: .medium, design: .rounded))
     }
 }
 

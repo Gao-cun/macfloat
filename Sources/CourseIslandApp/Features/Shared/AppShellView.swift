@@ -6,37 +6,73 @@ struct AppShellView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarSection.allCases, selection: $coordinator.selectedSection) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .tag(section)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("课程岛")
+                    .font(.system(size: 26, weight: .black, design: .rounded))
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+
+                Text(coordinator.hasCompletedInitialSetup ? "已完成基础配置" : "先完成基础配置")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+
+                VStack(spacing: 8) {
+                    ForEach(SidebarSection.allCases) { section in
+                        SidebarItemButton(
+                            section: section,
+                            isSelected: coordinator.selectedSection == section,
+                            showsSetupBadge: !coordinator.hasCompletedInitialSetup && section.requiresSetup
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                coordinator.selectedSection = section
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+
+                Spacer()
             }
-            .scrollContentBackground(.hidden)
             .background(Theme.canvas)
             .frame(minWidth: 200)
         } detail: {
             ZStack {
                 Theme.canvas.ignoresSafeArea()
-                if !coordinator.hasCompletedInitialSetup {
-                    WelcomeSetupView()
-                } else {
-                    Group {
-                        switch coordinator.selectedSection {
-                        case .schedule:
+                Group {
+                    switch coordinator.selectedSection {
+                    case .schedule:
+                        if coordinator.hasCompletedInitialSetup {
                             ScheduleDashboardView()
-                        case .courses:
-                            CourseManagementView()
-                        case .reminders:
-                            ReminderListView()
-                        case .settings:
-                            SettingsView()
+                        } else {
+                            SetupRequiredView(
+                                title: "完成基础配置后再看课表",
+                                message: "先去设置里创建当前学期并补齐有效节次模板。完成后，周视图和顶部胶囊才有可计算的课程时间。",
+                                primaryTitle: "去完成配置",
+                                secondaryTitle: "打开课程页"
+                            ) {
+                                coordinator.selectedSection = .settings
+                            } secondaryAction: {
+                                coordinator.selectedSection = .courses
+                            }
                         }
+                    case .courses:
+                        CourseManagementView()
+                    case .reminders:
+                        ReminderListView()
+                    case .settings:
+                        SettingsView()
                     }
-                    .padding(24)
                 }
+                .padding(24)
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .onAppear {
+            if !coordinator.hasCompletedInitialSetup {
+                coordinator.selectedSection = .settings
+            }
+        }
         .sheet(
             isPresented: $coordinator.isPresentingCourseEditor,
             onDismiss: { coordinator.clearCourseEditorState() }
@@ -49,6 +85,49 @@ struct AppShellView: View {
             .environmentObject(store)
             .frame(minWidth: 720, minHeight: 640)
         }
+    }
+}
+
+private struct SidebarItemButton: View {
+    let section: SidebarSection
+    let isSelected: Bool
+    let showsSetupBadge: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: section.systemImage)
+                    .font(.system(size: 15, weight: .bold))
+                    .frame(width: 20)
+
+                Text(section.title)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+
+                Spacer()
+
+                if showsSetupBadge {
+                    Text("需配置")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.16), in: Capsule())
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.72) : Color.white.opacity(0.3))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(isSelected ? Color.white.opacity(0.7) : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -97,7 +176,7 @@ private struct WelcomeSetupView: View {
             VStack(alignment: .leading, spacing: 12) {
                 onboardingRow(title: "1. 创建当前学期", isDone: store.activeTerm != nil)
                 onboardingRow(title: "2. 配置有效节次模板", isDone: coordinator.hasCompletedInitialSetup)
-                onboardingRow(title: "3. 录入第一门课程", isDone: coordinator.hasAtLeastOneCourse)
+                onboardingRow(title: "3. 录入第一门课程", isDone: coordinator.hasCompletedInitialSetup && coordinator.hasAtLeastOneCourse)
 
                 if let message {
                     Text(message)
@@ -173,11 +252,18 @@ private struct WelcomeSetupView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(coordinator.hasCompletedInitialSetup ? "基础配置已完成，可以进入主界面继续录课。" : "先完成学期和节次配置，再进入主界面。")
                     .foregroundStyle(.secondary)
-                Button(coordinator.hasCompletedInitialSetup ? "进入应用" : "等待完成基础配置") {
-                    coordinator.selectedSection = coordinator.hasAtLeastOneCourse ? .schedule : .courses
+                HStack(spacing: 10) {
+                    Button(coordinator.hasCompletedInitialSetup ? "去课程页录课" : "等待完成基础配置") {
+                        coordinator.selectedSection = .courses
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!coordinator.hasCompletedInitialSetup)
+
+                    Button("查看设置页") {
+                        coordinator.selectedSection = .settings
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!coordinator.hasCompletedInitialSetup)
             }
         }
         .groupBoxStyle(CardGroupBoxStyle())
@@ -200,6 +286,49 @@ private struct WelcomeSetupView: View {
                 .foregroundStyle(isDone ? Color.green : Color.secondary)
             Text(title)
                 .font(.system(size: 14, weight: .medium, design: .rounded))
+        }
+    }
+}
+
+private struct SetupRequiredView: View {
+    let title: String
+    let message: String
+    let primaryTitle: String
+    let secondaryTitle: String
+    let primaryAction: () -> Void
+    let secondaryAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.system(size: 28, weight: .black, design: .rounded))
+            Text(message)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                Button(primaryTitle, action: primaryAction)
+                    .buttonStyle(.borderedProminent)
+                Button(secondaryTitle, action: secondaryAction)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color.white.opacity(0.68))
+        )
+    }
+}
+
+private extension SidebarSection {
+    var requiresSetup: Bool {
+        switch self {
+        case .schedule, .courses:
+            return true
+        case .reminders, .settings:
+            return false
         }
     }
 }

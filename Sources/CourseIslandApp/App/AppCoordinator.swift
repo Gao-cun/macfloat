@@ -233,16 +233,19 @@ final class AppCoordinator: ObservableObject {
 
     func ensureWeekdayTemplates() {
         guard let termIndex = store.terms.firstIndex(where: \.isActive) else { return }
-        let existingWeekdays = Set(store.terms[termIndex].templates.map(\.weekday))
-
-        for weekday in 1...7 where !existingWeekdays.contains(weekday) {
-            store.terms[termIndex].templates.append(
-                DayScheduleTemplate(weekday: weekday, periods: Self.defaultPeriodSlots())
-            )
-        }
-
-        store.terms[termIndex].templates.sort { $0.weekday < $1.weekday }
+        let sourcePeriods = store.terms[termIndex].templates.sorted { $0.weekday < $1.weekday }.first?.periods ?? Self.defaultPeriodSlots()
+        store.terms[termIndex].templates = unifiedTemplates(from: sourcePeriods, existing: store.terms[termIndex].templates)
         store.persist()
+    }
+
+    func updateActiveTermSharedPeriods(_ periods: [PeriodSlot]) {
+        guard let term = activeTerm else { return }
+        guard let index = store.terms.firstIndex(where: { $0.id == term.id }) else { return }
+
+        store.terms[index].templates = unifiedTemplates(from: periods, existing: store.terms[index].templates)
+        store.persist()
+        clearSelectionIfNeededForSelectedWeek()
+        refreshIslandStatus()
     }
 
     func updateActiveTerm(_ term: Term) {
@@ -462,6 +465,15 @@ final class AppCoordinator: ObservableObject {
         let nowPlayingSummary = nowPlayingService.currentSummary()
         islandViewModel.weatherSummary = weatherSummary
         islandViewModel.nowPlayingSummary = nowPlayingSummary
+    }
+
+    private func unifiedTemplates(from periods: [PeriodSlot], existing: [DayScheduleTemplate]) -> [DayScheduleTemplate] {
+        let existingMap = Dictionary(uniqueKeysWithValues: existing.map { ($0.weekday, $0) })
+        return (1...7).map { weekday in
+            var template = existingMap[weekday] ?? DayScheduleTemplate(weekday: weekday)
+            template.periods = periods
+            return template
+        }
     }
 
     static func defaultPeriodSlots() -> [PeriodSlot] {
